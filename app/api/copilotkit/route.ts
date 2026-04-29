@@ -6,8 +6,8 @@ import {
 
 function decodeServiceAccount(b64: string) {
   const raw = Buffer.from(b64.trim(), "base64").toString("utf-8");
-  // Service account JSONs sometimes have literal control chars (e.g. newlines)
-  // inside string values, making them invalid JSON. Walk char-by-char and escape them.
+  // Service account JSONs sometimes have literal control chars inside string
+  // values (e.g. unescaped newlines in private_key). Walk char-by-char and fix.
   let result = "";
   let inString = false;
   let escaped = false;
@@ -32,13 +32,14 @@ function decodeServiceAccount(b64: string) {
   return JSON.parse(result);
 }
 
-export const POST = async (req: Request) => {
+export function buildHandler() {
   let credentials: any;
   try {
     credentials = decodeServiceAccount(process.env.GOOGLE_BASE64_CREDS!);
   } catch (e) {
     console.error("[CopilotKit] Failed to decode GOOGLE_BASE64_CREDS:", e);
-    return new Response("Credential decode error: " + String(e), { status: 500 });
+    return async () =>
+      new Response("Credential decode error: " + String(e), { status: 500 });
   }
 
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
@@ -60,7 +61,7 @@ export const POST = async (req: Request) => {
           );
         });
 
-        console.log("[CopilotKit] Using project:", credentials.project_id, "client_email:", credentials.client_email);
+        console.log("[CopilotKit] project:", credentials.project_id);
 
         const model = new ChatGoogle({
           model: "gemini-3-flash-preview",
@@ -72,7 +73,6 @@ export const POST = async (req: Request) => {
           },
         }).bindTools(tools);
 
-        console.log("[CopilotKit] ChatGoogle model created, streaming...");
         return model.stream(filteredMessages, {
           metadata: { conversation_id: threadId },
         });
@@ -81,5 +81,9 @@ export const POST = async (req: Request) => {
     endpoint: "/api/copilotkit",
   });
 
-  return handleRequest(req);
-};
+  return handleRequest;
+}
+
+const handler = buildHandler();
+export const GET = handler;
+export const POST = handler;
