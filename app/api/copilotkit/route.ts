@@ -29,9 +29,13 @@ export const POST = async (req: Request) => {
         });
 
         const model = new ChatGoogle({
-          modelName: "gemini-3-flash-preview",
-          apiVersion: "v1",
-          authOptions: { credentials },
+          model: "gemini-2.0-flash-001",
+          platformType: "gcp",   // Vertex AI — matches service account auth
+          location: "us-central1",
+          authOptions: {
+            credentials,
+            projectId: credentials.project_id,
+          },
         }).bindTools(tools);
 
         return model.stream(filteredMessages, {
