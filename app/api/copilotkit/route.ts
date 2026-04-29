@@ -33,7 +33,13 @@ function decodeServiceAccount(b64: string) {
 }
 
 export const POST = async (req: Request) => {
-  const credentials = decodeServiceAccount(process.env.GOOGLE_BASE64_CREDS!);
+  let credentials: any;
+  try {
+    credentials = decodeServiceAccount(process.env.GOOGLE_BASE64_CREDS!);
+  } catch (e) {
+    console.error("[CopilotKit] Failed to decode GOOGLE_BASE64_CREDS:", e);
+    return new Response("Credential decode error: " + String(e), { status: 500 });
+  }
 
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
     runtime: new CopilotRuntime(),
@@ -54,9 +60,11 @@ export const POST = async (req: Request) => {
           );
         });
 
+        console.log("[CopilotKit] Using project:", credentials.project_id, "client_email:", credentials.client_email);
+
         const model = new ChatGoogle({
           model: "gemini-3-flash-preview",
-          platformType: "gcp",   // Vertex AI — matches service account auth
+          platformType: "gcp",
           location: "global",
           authOptions: {
             credentials,
@@ -64,6 +72,7 @@ export const POST = async (req: Request) => {
           },
         }).bindTools(tools);
 
+        console.log("[CopilotKit] ChatGoogle model created, streaming...");
         return model.stream(filteredMessages, {
           metadata: { conversation_id: threadId },
         });
