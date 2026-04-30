@@ -1,47 +1,27 @@
+import { writeFileSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import {
   CopilotRuntime,
   LangChainAdapter,
   copilotRuntimeNextJSAppRouterEndpoint,
 } from "@copilotkit/runtime";
 
-function decodeServiceAccount(b64: string) {
-  const raw = Buffer.from(b64.trim(), "base64").toString("utf-8");
-  // Service account JSONs sometimes have literal control chars inside string
-  // values (e.g. unescaped newlines in private_key). Walk char-by-char and fix.
-  let result = "";
-  let inString = false;
-  let escaped = false;
-  for (const ch of raw) {
-    if (escaped) {
-      result += ch;
-      escaped = false;
-    } else if (ch === "\\") {
-      result += ch;
-      escaped = true;
-    } else if (ch === '"') {
-      result += ch;
-      inString = !inString;
-    } else if (inString && (ch === "\n" || ch === "\r" || ch === "\t")) {
-      if (ch === "\n") result += "\\n";
-      else if (ch === "\r") result += "\\r";
-      else result += "\\t";
-    } else {
-      result += ch;
-    }
-  }
-  return JSON.parse(result);
-}
+// Write the service account bytes to a temp file once at module load.
+// This mirrors the main app's keyFilename approach and avoids JSON.parse
+// issues with private keys that contain literal control characters.
+const _creds = Buffer.from(process.env.GOOGLE_BASE64_CREDS!.trim(), "base64");
+const CRED_PATH = join(tmpdir(), "ozigi-copilot-creds.json");
+writeFileSync(CRED_PATH, _creds);
+
+// Extract project_id with a simple regex — no JSON.parse needed.
+const PROJECT_ID =
+  _creds.toString("utf-8").match(/"project_id"\s*:\s*"([^"]+)"/)?.[1] ??
+  "ozigi-489021";
+
+console.log("[CopilotKit] Credentials written. project:", PROJECT_ID);
 
 export function buildHandler() {
-  let credentials: any;
-  try {
-    credentials = decodeServiceAccount(process.env.GOOGLE_BASE64_CREDS!);
-  } catch (e) {
-    console.error("[CopilotKit] Failed to decode GOOGLE_BASE64_CREDS:", e);
-    return async () =>
-      new Response("Credential decode error: " + String(e), { status: 500 });
-  }
-
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
     runtime: new CopilotRuntime(),
     serviceAdapter: new LangChainAdapter({
@@ -61,15 +41,13 @@ export function buildHandler() {
           );
         });
 
-        console.log("[CopilotKit] project:", credentials.project_id);
-
         const model = new ChatGoogle({
           model: "gemini-3-flash-preview",
           platformType: "gcp",
           location: "global",
           authOptions: {
-            credentials,
-            projectId: credentials.project_id,
+            keyFilename: CRED_PATH,
+            projectId: PROJECT_ID,
           },
         }).bindTools(tools);
 
