@@ -1,59 +1,32 @@
 import { writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import {
-  CopilotRuntime,
-  LangChainAdapter,
-  copilotRuntimeNextJSAppRouterEndpoint,
-} from "@copilotkit/runtime";
+import { createVertex } from "@ai-sdk/google-vertex";
+import { CopilotRuntime, BuiltInAgent, copilotRuntimeNextJSAppRouterEndpoint } from "@copilotkit/runtime";
 
-// Write the service account bytes to a temp file once at module load.
-// This mirrors the main app's keyFilename approach and avoids JSON.parse
-// issues with private keys that contain literal control characters.
+// Decode service account and write to a temp file — mirrors the main app's
+// keyFilename pattern and lets google-auth-library handle JSON parsing.
 const _creds = Buffer.from(process.env.GOOGLE_BASE64_CREDS!.trim(), "base64");
 const CRED_PATH = join(tmpdir(), "ozigi-copilot-creds.json");
 writeFileSync(CRED_PATH, _creds);
+process.env.GOOGLE_APPLICATION_CREDENTIALS = CRED_PATH;
 
-// Extract project_id with a simple regex — no JSON.parse needed.
+// Extract project_id without JSON.parse (avoids control-char issues in private_key).
 const PROJECT_ID =
   _creds.toString("utf-8").match(/"project_id"\s*:\s*"([^"]+)"/)?.[1] ??
   "ozigi-489021";
 
-console.log("[CopilotKit] Credentials written. project:", PROJECT_ID);
+console.log("[CopilotKit] Credentials ready. project:", PROJECT_ID);
+
+const vertex = createVertex({ project: PROJECT_ID, location: "global" });
 
 export function buildHandler() {
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
-    runtime: new CopilotRuntime(),
-    serviceAdapter: new LangChainAdapter({
-      chainFn: async ({ messages, tools, threadId }) => {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { ChatGoogle } = require("@langchain/google-gauth");
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { AIMessage } = require("@langchain/core/messages");
-
-        // Gemini rejects AIMessages with empty content — filter them out
-        const filteredMessages = messages.filter((message) => {
-          if (!(message instanceof AIMessage)) return true;
-          const aiMsg = message as any;
-          return (
-            (aiMsg.content && String(aiMsg.content).trim().length > 0) ||
-            (aiMsg.tool_calls && aiMsg.tool_calls.length > 0)
-          );
-        });
-
-        const model = new ChatGoogle({
-          model: "gemini-3-flash-preview",
-          platformType: "gcp",
-          location: "global",
-          authOptions: {
-            keyFilename: CRED_PATH,
-            projectId: PROJECT_ID,
-          },
-        }).bindTools(tools);
-
-        return model.stream(filteredMessages, {
-          metadata: { conversation_id: threadId },
-        });
+    runtime: new CopilotRuntime({
+      agents: {
+        default: new BuiltInAgent({
+          model: vertex("gemini-3-flash-preview"),
+        }),
       },
     }),
     endpoint: "/api/copilotkit",
